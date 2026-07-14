@@ -276,20 +276,33 @@ module.exports = async (req, res) => {
                 await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`, transcribedText);
 
                 if (!isAdmin) {
-                    // מאזין רגיל: עובר ישר לג'נרציה עם קול ברירת מחדל (Schedar)
-                    const defaultVoiceId = "Schedar";
-                    const monotonicInstruction = `Say monotonically, neutrally, flatly and slightly fast: ${transcribedText}`;
-                    const ttsBuffer = await gemini.generateSpeech(monotonicInstruction, defaultVoiceId);
-                    
-                    const tempTtsWavPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.wav`;
-                    await yemot.uploadFile(tempTtsWavPath, ttsBuffer);
-
-                    // השמעת הקראה ותפריט אישור למאזין
-                    responseBuilder = new YemotCommandBuilder("read")
-                        .addFile(`${TEMP_FOLDER}/${ApiCallId}_listener_tts`)
-                        .addText("לאישור הקישו 1 להקלטה מחדש הקש 2 לביטול וחזרה הקש 3")
-                        .setReadDigitsAdvanced("ListenerConfirm", 1, 1, 10, "No", true, false, false);
-                } else {
+    try {
+        // מאזין רגיל: מנסים ליצור שמע איכותי ב-Gemini
+        const defaultVoiceId = "Schedar";
+        const monotonicInstruction = `Say monotonically, neutrally, flatly and slightly fast: ${transcribedText}`;
+        const ttsBuffer = await gemini.generateSpeech(monotonicInstruction, defaultVoiceId);
+        
+        const tempTtsWavPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.wav`;
+        await yemot.uploadFile(tempTtsWavPath, ttsBuffer);
+        
+        responseBuilder = new YemotCommandBuilder("read")
+            .addFile(`${TEMP_FOLDER}/${ApiCallId}_listener_tts`);
+    } catch (apiError) {
+        TelemetryLogger.warn("MainHandler", "TTS_Fallback", "יצירת שמע ב-Gemini נכשלה למאזין. מעבר למנוע TTS מקומי של ימות.", apiError);
+        
+        // יצירת קובץ גיבוי מסוג TTS בימות המשיח
+        const tempTtsTextPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.tts`;
+        await yemot.uploadTextFile(tempTtsTextPath, transcribedText);
+        
+        responseBuilder = new YemotCommandBuilder("read")
+            .addFile(`${TEMP_FOLDER}/${ApiCallId}_listener_tts`); // ימות המשיח משמיע קבצי tts באופן זהה לחלוטין
+    }
+    
+    // המשך התפריט הרגיל למאזין
+    responseBuilder
+        .addText("לאישור הקישו 1 להקלטה מחדש הקש 2 לביטול וחזרה הקש 3")
+        .setReadDigitsAdvanced("ListenerConfirm", 1, 1, 10, "No", true, false, false);
+} else {
                     // מנהל: עובר קודם כל לבחירת סגנון קול (לפני הג'נרציה!)
                     responseBuilder = new YemotCommandBuilder("read")
                         .addText("התמלול הושלם בהצלחה")
@@ -311,19 +324,29 @@ module.exports = async (req, res) => {
                     const savedText = await yemot.downloadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_text.txt`);
 
                     if (voiceChoice === "1") {
-                        // קול ברירת מחדל מנהל
-                        const defaultVoiceId = "Schedar";
-                        const monotonicInstruction = `Say monotonically, neutrally, flatly and slightly fast: ${savedText}`;
-                        const ttsBuffer = await gemini.generateSpeech(monotonicInstruction, defaultVoiceId);
-                        
-                        await yemot.uploadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.wav`, ttsBuffer);
+    try {
+        const defaultVoiceId = "Schedar";
+        const monotonicInstruction = `Say monotonically, neutrally, flatly and slightly fast: ${savedText}`;
+        const ttsBuffer = await gemini.generateSpeech(monotonicInstruction, defaultVoiceId);
+        
+        await yemot.uploadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.wav`, ttsBuffer);
+        
+        responseBuilder = new YemotCommandBuilder("read")
+            .addFile(`${TEMP_FOLDER}/${ApiCallId}_listener_tts`);
+    } catch (apiError) {
+        TelemetryLogger.warn("MainHandler", "TTS_Fallback", "יצירת שמע נכשלה למנהל בקול ברירת מחדל. מעבר ל-TTS מקומי.", apiError);
+        
+        const tempTtsTextPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.tts`;
+        await yemot.uploadTextFile(tempTtsTextPath, savedText);
+        
+        responseBuilder = new YemotCommandBuilder("read")
+            .addFile(`${TEMP_FOLDER}/${ApiCallId}_listener_tts`);
+    }
 
-                        // משמיעים למנהל את ההקראה ומציגים לו את תפריט ה-1,2,3
-                        responseBuilder = new YemotCommandBuilder("read")
-                            .addFile(`${TEMP_FOLDER}/${ApiCallId}_listener_tts`)
-                            .addText("לאישור הקישו 1 להקלטה מחדש הקש 2 לביטול וחזרה הקש 3")
-                            .setReadDigitsAdvanced("ListenerConfirm", 1, 1, 10, "No", true, false, false);
-                    } else if (voiceChoice === "2") {
+    responseBuilder
+        .addText("לאישור הקישו 1 להקלטה מחדש הקש 2 לביטול וחזרה הקש 3")
+        .setReadDigitsAdvanced("ListenerConfirm", 1, 1, 10, "No", true, false, false);
+} else if (voiceChoice === "2") {
                         // מעבר לבחירת קולות מורחבת (שלב 106 הקיים אצלך בקוד)
                         responseBuilder = new YemotCommandBuilder("read")
                             .addText("אנא בחרו את קול הקריין הרצוי")
@@ -337,19 +360,33 @@ module.exports = async (req, res) => {
                 const confirmChoice = query.ListenerConfirm;
 
                 if (confirmChoice === "1") {
-                    if (!isAdmin) {
-                        // מאזין אישר -> שמירה אוטומטית סופית
-                        const cleanDestFolder = cleanAndSanitizeFolder(defaultSaveFolderConfig);
-                        const nextFileNum = await yemot.getNextSequenceFileName(cleanDestFolder || "/");
-                        const finalPath = cleanDestFolder ? `ivr2:/${cleanDestFolder}/${nextFileNum}.wav` : `ivr2:/${nextFileNum}.wav`;
-                        
-                        const listenerTtsBuffer = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.wav`);
-                        await yemot.uploadFile(finalPath, listenerTtsBuffer);
+    if (!isAdmin) {
+        // מאזין אישר -> שמירה אוטומטית סופית
+        const cleanDestFolder = cleanAndSanitizeFolder(defaultSaveFolderConfig);
+        const nextFileNum = await yemot.getNextSequenceFileName(cleanDestFolder || "/");
+        
+        let finalPath = "";
+        let isFallbackTts = false;
+        
+        try {
+            // ננסה להוריד את קובץ ה-wav. אם הוא לא קיים, סימן שהשתמשנו בגיבוי TTS
+            const listenerTtsBuffer = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.wav`);
+            finalPath = cleanDestFolder ? `ivr2:/${cleanDestFolder}/${nextFileNum}.wav` : `ivr2:/${nextFileNum}.wav`;
+            await yemot.uploadFile(finalPath, listenerTtsBuffer);
+        } catch (downloadErr) {
+            isFallbackTts = true;
+            TelemetryLogger.info("MainHandler", "Save_Fallback", "מזהה שהקובץ הזמני הוא קובץ TTS גיבויי.");
+            
+            // הורדת קובץ הגיבוי והעלאתו מחדש כקובץ TTS קבוע בשלוחה
+            const fallbackText = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_listener_tts.tts`);
+            finalPath = cleanDestFolder ? `ivr2:/${cleanDestFolder}/${nextFileNum}.tts` : `ivr2:/${nextFileNum}.tts`;
+            await yemot.uploadTextFile(finalPath, fallbackText);
+        }
 
-                        responseBuilder = new YemotCommandBuilder("id_list_message")
-                            .addText("ההודעה נשלחה לבדיקה, היא תעלה למערכת בזמן הקרוב.")
-                            .addGoToFolder("/"); 
-                    } else {
+        responseBuilder = new YemotCommandBuilder("id_list_message")
+            .addText("ההודעה נשלחה לבדיקה, היא תעלה למערכת בזמן הקרוב.")
+            .addGoToFolder("/"); 
+    } else {
                         // מנהל אישר -> רק עכשיו עובר לשלוחות שמירה וניהול (שלב 107 הקיים אצלך)
                         responseBuilder = new YemotCommandBuilder("read")
                             .addText("ההקראה אושרה.")
@@ -479,26 +516,41 @@ module.exports = async (req, res) => {
                     }
                 }
 
-                // יצירת דיבור רובוטי מונוטוני מהיר
-                const monotonicInstructionAdmin = `Say monotonically, neutrally, flatly and slightly fast: ${transcribedTextForTts}`;
-                const finalTtsBuffer = await gemini.generateSpeech(monotonicInstructionAdmin, chosenVoiceId);
+                let finalTtsBuffer = null;
+let isFallbackTts = false;
 
-                // העלאת הקובץ למיקום זמני לצורך סנכרון מהיר
-                const tempTtsWavPath = `ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`;
-                await yemot.uploadFile(tempTtsWavPath, finalTtsBuffer);
-                if (saveType === "1") {
-                    // שמירה רגילה - מעבר ישיר לביצוע השמירה (אין צורך בשאלות נוספות)
-                    let targetFolder = query.TargetFolderDefault === "0" ? "" : query.TargetFolderDefault;
-                    const cleanFolder = cleanAndSanitizeFolder(targetFolder);
-                    const nextSeqFile = await yemot.getNextSequenceFileName(cleanFolder || "/");
-                    
-                    const finalUploadPath = cleanFolder ? `ivr2:/${cleanFolder}/${nextSeqFile}.wav` : `ivr2:/${nextSeqFile}.wav`;
-                    await yemot.uploadFile(finalUploadPath, finalTtsBuffer);
+try {
+    // מנסים ליצור דיבור רובוטי ב-Gemini
+    const monotonicInstructionAdmin = `Say monotonically, neutrally, flatly and slightly fast: ${transcribedTextForTts}`;
+    finalTtsBuffer = await gemini.generateSpeech(monotonicInstructionAdmin, chosenVoiceId);
+    
+    // העלאת הקובץ למיקום זמני לצורך סנכרון מהיר
+    await yemot.uploadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`, finalTtsBuffer);
+} catch (apiError) {
+    isFallbackTts = true;
+    TelemetryLogger.warn("MainHandler", "TTS_Fallback_Admin", "כשל בייצור דיבור למנהל, נשמר קובץ TTS.", apiError);
+    
+    // שמירה זמנית בפורמט tts
+    await yemot.uploadTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.tts`, transcribedTextForTts);
+}
 
-                    responseBuilder = new YemotCommandBuilder("id_list_message")
-                        .addText(`הקובץ נשמר בהצלחה כקובץ מספר ${nextSeqFile} תודה ולהתראות`)
-                        .addGoToFolder("/");
-                } else {
+if (saveType === "1") {
+    let targetFolder = query.TargetFolderDefault === "0" ? "" : query.TargetFolderDefault;
+    const cleanFolder = cleanAndSanitizeFolder(targetFolder);
+    const nextSeqFile = await yemot.getNextSequenceFileName(cleanFolder || "/");
+    
+    if (!isFallbackTts) {
+        const finalUploadPath = cleanFolder ? `ivr2:/${cleanFolder}/${nextSeqFile}.wav` : `ivr2:/${nextSeqFile}.wav`;
+        await yemot.uploadFile(finalUploadPath, finalTtsBuffer);
+    } else {
+        const finalUploadPath = cleanFolder ? `ivr2:/${cleanFolder}/${nextSeqFile}.tts` : `ivr2:/${nextSeqFile}.tts`;
+        await yemot.uploadTextFile(finalUploadPath, transcribedTextForTts);
+    }
+
+    responseBuilder = new YemotCommandBuilder("id_list_message")
+        .addText(`הקובץ נשמר בהצלחה כקובץ מספר ${nextSeqFile} תודה ולהתראות`)
+        .addGoToFolder("/");
+} else {
                     // שמירה כהודעת מערכת - נבקש הקשת 4 ספרות של מספר ההודעה (MXXXX) ללא בקשות אישור מיותרות
                     responseBuilder = new YemotCommandBuilder("read")
                         .addText("אנא הקישו את מספר הודעת המערכת בארבע ספרות ובסיום הקישו סולמית")
@@ -523,14 +575,25 @@ module.exports = async (req, res) => {
                 let targetSystemFolder = query.TargetFolderDefault === "0" ? "" : query.TargetFolderDefault;
                 const cleanSystemFolder = cleanAndSanitizeFolder(targetSystemFolder);
                 
-                // הורדת ה-TTS המוגמר מהמיקום הזמני (כבר עיבדנו והעלינו אותו בשלב 301)
-                const completedTtsBuffer = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`);
-                
-                const systemFileName = `M${systemMsgNumber}.wav`;
-                const systemUploadPath = cleanSystemFolder ? `ivr2:/${cleanSystemFolder}/${systemFileName}` : `ivr2:/${systemFileName}`;
-                
-                // שמירה סופית כהודעת מערכת
-                await yemot.uploadFile(systemUploadPath, completedTtsBuffer);
+                let systemFileName = "";
+let isFallbackTts = false;
+
+try {
+    // ננסה להוריד את קובץ ה-wav הזמני
+    const completedTtsBuffer = await yemot.downloadFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.wav`);
+    systemFileName = `M${systemMsgNumber}.wav`;
+    const systemUploadPath = cleanSystemFolder ? `ivr2:/${cleanSystemFolder}/${systemFileName}` : `ivr2:/${systemFileName}`;
+    await yemot.uploadFile(systemUploadPath, completedTtsBuffer);
+} catch (err) {
+    isFallbackTts = true;
+    TelemetryLogger.info("MainHandler", "SystemMessage_Fallback", "מזהה קובץ TTS גיבוי עבור הודעת מערכת.");
+    
+    // הורדת טקסט הגיבוי ושמירתו כקובץ MXXXX.tts
+    const fallbackText = await yemot.getTextFile(`ivr2:${TEMP_FOLDER}/${ApiCallId}_tts.tts`);
+    systemFileName = `M${systemMsgNumber}.tts`;
+    const systemUploadPath = cleanSystemFolder ? `ivr2:/${cleanSystemFolder}/${systemFileName}` : `ivr2:/${systemFileName}`;
+    await yemot.uploadTextFile(systemUploadPath, fallbackText);
+}
 
                 responseBuilder = new YemotCommandBuilder("id_list_message")
                     .addText(`הקובץ נשמר בהצלחה כהודעת מערכת ${systemFileName} בשלוחה המבוקשת`)
