@@ -258,8 +258,28 @@ module.exports = async (req, res) => {
                 // ====================================================================
                 // שלב 100: STT - תמלול ההקלטה הראשי
                 // ====================================================================
+
                 const mainRecordPath = `${TEMP_FOLDER}/${ApiCallId}_main.wav`;
-                const mainAudioBuffer = await yemot.downloadFile(`ivr2:${mainRecordPath}`);
+let mainAudioBuffer = null;
+let attempts = 0;
+const maxAttempts = 5;
+
+while (attempts < maxAttempts) {
+    try {
+        TelemetryLogger.info("MainHandler", "STT_Download", `ניסיון הורדה ${attempts + 1} מתוך ${maxAttempts} עבור: ${mainRecordPath}`);
+        mainAudioBuffer = await yemot.downloadFile(`ivr2:${mainRecordPath}`);
+        break; // אם ההורדה הצליחה, נצא מהלופ
+    } catch (downloadErr) {
+        attempts++;
+        if (attempts >= maxAttempts) {
+            // אם הגענו למקסימום הניסיונות ועדיין נכשל, נזרוק את השגיאה הלאה
+            throw new Error(`קובץ ההקלטה לא נמצא בשרת ימות המשיח לאחר מספר ניסיונות: ${downloadErr.message}`);
+        }
+        // המתנה של 800 מילישניות לפני הניסיון הבא כדי לתת לימות המשיח זמן לשמור את הקובץ
+        TelemetryLogger.info("MainHandler", "STT_Download_Wait", `הקובץ עדיין לא מוכן, ממתין 800 מילישניות...`);
+        await new Promise(resolve => setTimeout(resolve, 800));
+    }
+}
                 
                 const transcribedText = await gemini.transcribeAudioWithEmotion(mainAudioBuffer);
                 TelemetryLogger.info("MainHandler", "STT", `תומלל בהצלחה: ${transcribedText}`);
