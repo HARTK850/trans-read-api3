@@ -576,7 +576,7 @@ if (saveType === "1") {
                 const cleanSystemFolder = cleanAndSanitizeFolder(targetSystemFolder);
                 
                 let systemFileName = "";
-let isFallbackTts = false;
+                isFallbackTts = false;
 
 try {
     // ננסה להוריד את קובץ ה-wav הזמני
